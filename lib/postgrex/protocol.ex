@@ -66,6 +66,7 @@ defmodule Postgrex.Protocol do
           {:ok, state}
           | {:error, Postgrex.Error.t() | %DBConnection.ConnectionError{}}
   def connect(opts) do
+    Logger.info("[Postgrex.Protocol] (#{inspect(self())}) Connect/1")
     endpoints = endpoints(opts)
 
     timeout = opts[:timeout] || @timeout
@@ -97,6 +98,10 @@ defmodule Postgrex.Protocol do
     }
 
     connect_timeout = Keyword.get(opts, :connect_timeout, timeout)
+
+    Logger.info(
+      "[Postgrex.Protocol] (#{inspect(self())}) Connect/1 - timeout: #{timeout}, ping_timeout: #{ping_timeout}, connect_timeout: #{connect_timeout}"
+    )
 
     status = %{
       opts: opts,
@@ -194,11 +199,21 @@ defmodule Postgrex.Protocol do
   end
 
   defp connect_and_handshake(host, port, sock_opts, timeout, s, status) do
+    Logger.info("[Postgrex.Protocol] (#{inspect(self())}) connect_and_handshake/6")
+
     case connect(host, port, sock_opts, timeout, s) do
       {:ok, s} ->
+        Logger.info(
+          "[Postgrex.Protocol] (#{inspect(self())}) connect_and_handshake/6 - :ok, s: #{inspect(s)}, host: #{host}, port: #{port}"
+        )
+
         handshake(s, status)
 
       {:error, _} = error ->
+        Logger.info(
+          "[Postgrex.Protocol] (#{inspect(self())}) connect_and_handshake/6 - error: #{inspect(error)}"
+        )
+
         error
     end
   end
@@ -206,6 +221,8 @@ defmodule Postgrex.Protocol do
   @impl true
   @spec disconnect(Exception.t(), state) :: :ok
   def disconnect(_, s) do
+    Logger.info("[Postgrex.Protocol] (#{inspect(self())}) disconnect/2 - s: #{inspect(s)}")
+
     # cancel the request first otherwise PostgreSQL will log
     # every time the connection is explicitly disconnected
     # because the associated PID will no longer exist.
@@ -625,11 +642,18 @@ defmodule Postgrex.Protocol do
   defp connect(host, port, sock_opts, timeout, s) do
     buffer? = Keyword.has_key?(sock_opts, :buffer)
 
+    Logger.info(
+      "[Postgrex.Protocol] (#{inspect(self())}) connect/5 - Start, timeout: #{timeout}, host: #{host}, port: #{port}"
+    )
+
     case :gen_tcp.connect(host, port, sock_opts ++ @sock_opts, timeout) do
       {:ok, sock} when buffer? ->
         {:ok, %{s | sock: {:gen_tcp, sock}}}
 
+        Logger.info("[Postgrex.Protocol] (#{inspect(self())}) connect/5 - :ok")
+
       {:ok, sock} ->
+        Logger.info("[Postgrex.Protocol] (#{inspect(self())}) connect/5 - :ok")
         # A suitable :buffer is only set if :recbuf is included in
         # :socket_options.
         {:ok, [sndbuf: sndbuf, recbuf: recbuf, buffer: buffer]} =
@@ -640,6 +664,10 @@ defmodule Postgrex.Protocol do
         {:ok, %{s | sock: {:gen_tcp, sock}}}
 
       {:error, reason} ->
+        Logger.info(
+          "[Postgrex.Protocol] (#{inspect(self())}) connect/5 - :error, reason: #{inspect(reason)}"
+        )
+
         case host do
           {:local, socket_addr} ->
             {:error, conn_error(:tcp, "connect (#{socket_addr})", reason)}
@@ -656,6 +684,11 @@ defmodule Postgrex.Protocol do
     {:ok, peer} = :inet.peername(sock)
     %{opts: opts} = status
     handshake_timeout = Keyword.get(opts, :handshake_timeout, timeout)
+
+    Logger.info(
+      "[Postgrex.Protocol] (#{inspect(self())}) handshake/2 - handshake_timeout: #{handshake_timeout}"
+    )
+
     timer = start_handshake_timer(handshake_timeout, sock)
 
     case do_handshake(%{s | peer: peer}, status) do
@@ -665,6 +698,10 @@ defmodule Postgrex.Protocol do
         {:ok, %{s | parameters: ref}}
 
       {:disconnect, err, s} ->
+        Logger.info(
+          "[Postgrex.Protocol] (#{inspect(self())}) handshake/2 - disconnect error: #{inspect(err)}, s: #{inspect(s)}"
+        )
+
         cancel_handshake_timer(timer)
         disconnect(err, s)
         {:error, err}
@@ -681,6 +718,10 @@ defmodule Postgrex.Protocol do
 
   @doc false
   def handshake_shutdown(timeout, pid, sock) do
+    Logger.info(
+      "[Postgrex.Protocol] (#{inspect(self())}) handshake_shutdown/3 - timeout: #{timeout}, pid: #{inspect(pid)}"
+    )
+
     if Process.alive?(pid) do
       Logger.error(fn ->
         [
@@ -3429,9 +3470,14 @@ defmodule Postgrex.Protocol do
   defp cancel_request(s) do
     case do_cancel_request(s) do
       :ok ->
+        Logger.info("[Postgrex.Protocol] (#{inspect(self())}) cancel_request/1 - :ok")
         :ok
 
       {:error, action, reason} ->
+        Logger.info(
+          "[Postgrex.Protocol] (#{inspect(self())}) cancel_request/1 - :error, action: #{inspect(action)}, reason: #{inspect(reason)}"
+        )
+
         err = conn_error(:tcp, action, reason)
 
         Logger.error(fn ->
